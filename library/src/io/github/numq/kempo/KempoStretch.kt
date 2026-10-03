@@ -68,6 +68,7 @@ class KempoStretch(seed: Long = 1337L) {
 
     private var tmpProcessBuffer = FloatArray(0)
     private var tmpPreRollBuffer = FloatArray(0)
+    private var preRollOutput = Array(0) { FloatArray(0) }
     private var zeroBlockBuffer = FloatArray(0)
 
     private var prevInputOffset = -1
@@ -102,6 +103,7 @@ class KempoStretch(seed: Long = 1337L) {
 
     private val blockProcess = BlockProcessState()
     private val fracBuf = FloatArray(2)
+    private val singleSampleBuf = FloatArray(1)
 
     fun inputLatency(): Int = stft.analysisLatency()
     fun outputLatency(): Int = stft.synthesisLatency() + if (splitComputation) stft.defaultInterval() else 0
@@ -175,7 +177,9 @@ class KempoStretch(seed: Long = 1337L) {
         formantMetric = FloatArray(bands + 2)
 
         tmpProcessBuffer = FloatArray(blockSamples + intervalSamples)
-        tmpPreRollBuffer = FloatArray(outputLatency() * channels)
+        val outLat = outputLatency()
+        tmpPreRollBuffer = FloatArray(outLat * channels)
+        preRollOutput = Array(channels) { FloatArray(outLat) }
     }
 
     fun setTransposeFactor(multiplier: Float, tonalityLimit: Float = 0f) {
@@ -760,6 +764,74 @@ class KempoStretch(seed: Long = 1337L) {
         }
     }
 
+    private fun executeBlockProcessStep() {
+        var step = blockProcess.step++
+        if (blockProcess.newSpectrum) {
+            if (blockProcess.reanalysePrev) {
+                if (step < stft.analyseSteps()) {
+                    stashedInput.swap(stft.input)
+                    stft.analyseStep(step, stft.defaultInterval())
+                    stashedInput.swap(stft.input)
+                    return
+                }
+                step -= stft.analyseSteps()
+                if (step < 1) {
+                    for (c in 0 until channels) {
+                        val chBase = c * bands
+                        for (b in 0 until bands) {
+                            bandPrevInputRe[chBase + b] = stft.spectrumRe[chBase + b]
+                            bandPrevInputIm[chBase + b] = stft.spectrumIm[chBase + b]
+                        }
+                    }
+                    return
+                }
+                step -= 1
+            }
+
+            if (step < stft.analyseSteps()) {
+                stashedInput.swap(stft.input)
+                stft.analyseStep(step)
+                stashedInput.swap(stft.input)
+                return
+            }
+            step -= stft.analyseSteps()
+            if (step < 1) {
+                for (c in 0 until channels) {
+                    val chBase = c * bands
+                    for (b in 0 until bands) {
+                        bandInputRe[chBase + b] = stft.spectrumRe[chBase + b]
+                        bandInputIm[chBase + b] = stft.spectrumIm[chBase + b]
+                    }
+                }
+                return
+            }
+            step -= 1
+        }
+
+        if (step < processSpectrumSteps) {
+            processSpectrum(step)
+            return
+        }
+        step -= processSpectrumSteps
+
+        if (step < 1) {
+            for (c in 0 until channels) {
+                val chBase = c * bands
+                for (b in 0 until bands) {
+                    stft.spectrumRe[chBase + b] = bandOutputRe[chBase + b]
+                    stft.spectrumIm[chBase + b] = bandOutputIm[chBase + b]
+                }
+            }
+            return
+        }
+        step -= 1
+
+        if (step < stft.synthesiseSteps()) {
+            stft.synthesiseStep(step)
+            return
+        }
+    }
+
     fun process(
         inputs: Array<FloatArray>,
         inputSamples: Int,
@@ -823,9 +895,8 @@ class KempoStretch(seed: Long = 1337L) {
             silenceFirst = true
         }
 
-        val outSampleBuf = FloatArray(1)
-
-        for (outputIndex in 0 until outputSamples) {
+        var outputIndex = 0
+        while (outputIndex < outputSamples) {
             val newBlock = blockProcess.samplesSinceLast >= stft.defaultInterval()
             if (newBlock) {
                 blockProcess.step = 0
@@ -862,88 +933,35 @@ class KempoStretch(seed: Long = 1337L) {
                 blockProcess.steps += stft.synthesiseSteps() + 1
             }
 
-            var processToStep = if (newBlock) blockProcess.steps else 0
-            if (splitComputation) {
+            if (!splitComputation) {
+                while (blockProcess.step < blockProcess.steps) {
+                    executeBlockProcessStep()
+                }
+                val chunkSize = min(
+                    outputSamples - outputIndex, stft.defaultInterval() - blockProcess.samplesSinceLast
+                )
+                for (c in 0 until channels) {
+                    stft.readOutput(c, chunkSize, outputs[c], outputOffset + outputIndex)
+                }
+                stft.moveOutput(chunkSize)
+                blockProcess.samplesSinceLast += chunkSize
+                outputIndex += chunkSize
+            } else {
                 val ratio = (blockProcess.samplesSinceLast + 1).toFloat() / stft.defaultInterval()
-                processToStep = min(blockProcess.steps, ((blockProcess.steps + 0.999f) * ratio).toInt())
+                val processToStep = min(blockProcess.steps, ((blockProcess.steps + 0.999f) * ratio).toInt())
+                while (blockProcess.step < processToStep) {
+                    executeBlockProcessStep()
+                }
+                blockProcess.samplesSinceLast++
+                stashedOutput.swap(stft.output)
+                for (c in 0 until channels) {
+                    stft.readOutput(c, 1, singleSampleBuf, 0)
+                    outputs[c][outputOffset + outputIndex] = singleSampleBuf[0]
+                }
+                stft.moveOutput(1)
+                stashedOutput.swap(stft.output)
+                outputIndex++
             }
-
-            while (blockProcess.step < processToStep) {
-                var step = blockProcess.step++
-                if (blockProcess.newSpectrum) {
-                    if (blockProcess.reanalysePrev) {
-                        if (step < stft.analyseSteps()) {
-                            stashedInput.swap(stft.input)
-                            stft.analyseStep(step, stft.defaultInterval())
-                            stashedInput.swap(stft.input)
-                            continue
-                        }
-                        step -= stft.analyseSteps()
-                        if (step < 1) {
-                            for (c in 0 until channels) {
-                                val chBase = c * bands
-                                for (b in 0 until bands) {
-                                    bandPrevInputRe[chBase + b] = stft.spectrumRe[chBase + b]
-                                    bandPrevInputIm[chBase + b] = stft.spectrumIm[chBase + b]
-                                }
-                            }
-                            continue
-                        }
-                        step -= 1
-                    }
-
-                    if (step < stft.analyseSteps()) {
-                        stashedInput.swap(stft.input)
-                        stft.analyseStep(step)
-                        stashedInput.swap(stft.input)
-                        continue
-                    }
-                    step -= stft.analyseSteps()
-                    if (step < 1) {
-                        for (c in 0 until channels) {
-                            val chBase = c * bands
-                            for (b in 0 until bands) {
-                                bandInputRe[chBase + b] = stft.spectrumRe[chBase + b]
-                                bandInputIm[chBase + b] = stft.spectrumIm[chBase + b]
-                            }
-                        }
-                        continue
-                    }
-                    step -= 1
-                }
-
-                if (step < processSpectrumSteps) {
-                    processSpectrum(step)
-                    continue
-                }
-                step -= processSpectrumSteps
-
-                if (step < 1) {
-                    for (c in 0 until channels) {
-                        val chBase = c * bands
-                        for (b in 0 until bands) {
-                            stft.spectrumRe[chBase + b] = bandOutputRe[chBase + b]
-                            stft.spectrumIm[chBase + b] = bandOutputIm[chBase + b]
-                        }
-                    }
-                    continue
-                }
-                step -= 1
-
-                if (step < stft.synthesiseSteps()) {
-                    stft.synthesiseStep(step)
-                    continue
-                }
-            }
-
-            blockProcess.samplesSinceLast++
-            if (splitComputation) stashedOutput.swap(stft.output)
-            for (c in 0 until channels) {
-                stft.readOutput(c, 1, outSampleBuf, 0)
-                outputs[c][outputOffset + outputIndex] = outSampleBuf[0]
-            }
-            stft.moveOutput(1)
-            if (splitComputation) stashedOutput.swap(stft.output)
         }
 
         copyInput(inputSamples)
@@ -983,10 +1001,7 @@ class KempoStretch(seed: Long = 1337L) {
     }
 
     fun stretch(
-        track: AudioTrack,
-        timeRatio: Float = 1.0f,
-        pitchSemitones: Float = 0.0f,
-        formantSemitones: Float = 0.0f
+        track: AudioTrack, timeRatio: Float = 1.0f, pitchSemitones: Float = 0.0f, formantSemitones: Float = 0.0f
     ): AudioTrack {
         val inSamples = track.numSamples
         val outSamples = (inSamples / timeRatio).roundToInt().coerceAtLeast(1)
@@ -1072,19 +1087,22 @@ class KempoStretch(seed: Long = 1337L) {
             tmpPreRollBuffer = FloatArray(neededPreRollSize)
         }
 
-        val preRollOutput = Array(channels) { FloatArray(outLat) }
+        if (preRollOutput.size != channels || (preRollOutput.isNotEmpty() && preRollOutput[0].size != outLat)) {
+            preRollOutput = Array(channels) { FloatArray(outLat) }
+        }
+        val preRoll = preRollOutput
 
         process(
             inputs = inputs,
             inputSamples = surplusInput,
-            outputs = preRollOutput,
+            outputs = preRoll,
             outputSamples = outLat,
             inputOffset = inputOffset + seekSamples,
             outputOffset = 0
         )
 
         for (c in 0 until channels) {
-            val chData = preRollOutput[c]
+            val chData = preRoll[c]
             val half = outLat / 2
             for (i in 0 until half) {
                 val temp = -chData[i]

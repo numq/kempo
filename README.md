@@ -62,9 +62,17 @@ Kempo is structured into three layers:
 
 ## Quick Start
 
-### Gradle Setup
+### Installation
 
-Add the dependency to your `build.gradle.kts` (or multiplatform source sets):
+#### Amper (`module.yaml`)
+
+```yaml
+dependencies:
+  - io.github.numq.kempo:kempo:1.0.0
+
+```
+
+#### Gradle (`build.gradle.kts`)
 
 ```kotlin
 dependencies {
@@ -103,29 +111,27 @@ For low-latency audio callbacks (e.g., audio output loops, game audio, synth eng
 import io.github.numq.kempo.KempoStretch
 import kotlin.math.max
 
-fun runStreaming(audioInputBlock: Array<FloatArray>, audioOutputBlock: Array<FloatArray>) {
-    val channels = 2
-    val sampleRate = 44100f
+class AudioStreamProcessor(channels: Int = 2, sampleRate: Float = 44100f) {
+    private val stretch = KempoStretch().apply {
+        // presetDefault: balanced quality (120 ms block, 30 ms interval)
+        presetDefault(channels, sampleRate)
+        setTransposeSemitones(semitones = 3.0f) // Transpose +3 semitones
+        setFormantSemitones(semitones = 0.0f)   // Keep natural vocal timbre
+    }
 
-    val stretch = KempoStretch()
-    // presetDefault: balanced quality (120 ms block, 30 ms interval)
-    stretch.presetDefault(channels, sampleRate)
+    private var timeRatio = 1.25f // 25% faster
+    val outBlockSize: Int = stretch.stft.defaultInterval()
+    val inBlockSize: Int get() = max(1, (outBlockSize / timeRatio).toInt())
 
-    // Set time-stretch ratio and pitch shift
-    val timeRatio = 1.25f // 25% faster
-    stretch.setTransposeSemitones(semitones = 3.0f) // Transpose +3 semitones
-    stretch.setFormantSemitones(semitones = 0.0f)  // Keep natural vocal timbre
-
-    val outBlockSize = stretch.stft.defaultInterval()
-    val inBlockSize = max(1, (outBlockSize / timeRatio).toInt())
-
-    // Process blocks inside the audio callback (zero allocations in hot loop)
-    stretch.process(
-        inputs = audioInputBlock,
-        inputSamples = inBlockSize,
-        outputs = audioOutputBlock,
-        outputSamples = outBlockSize
-    )
+    // Called repeatedly on the high-priority audio thread (zero allocations)
+    fun processBlock(audioInputBlock: Array<FloatArray>, audioOutputBlock: Array<FloatArray>) {
+        stretch.process(
+            inputs = audioInputBlock,
+            inputSamples = inBlockSize,
+            outputs = audioOutputBlock,
+            outputSamples = outBlockSize
+        )
+    }
 }
 
 ```
@@ -138,19 +144,22 @@ For exact file-to-file rendering or batch audio processing:
 
 ```kotlin
 import io.github.numq.kempo.KempoStretch
+import kotlin.math.roundToInt
 
 fun processFullTrack(
     pcmInput: Array<FloatArray>,
-    pcmOutput: Array<FloatArray>,
-    sampleRate: Float
-) {
+    sampleRate: Float,
+    timeRatio: Float = 1.0f,
+    pitchSemitones: Float = -2.0f
+): Array<FloatArray> {
     val channels = pcmInput.size
     val totalInputSamples = pcmInput[0].size
-    val totalOutputSamples = pcmOutput[0].size
+    val totalOutputSamples = (totalInputSamples * timeRatio).roundToInt().coerceAtLeast(1)
+    val pcmOutput = Array(channels) { FloatArray(totalOutputSamples) }
 
     val stretch = KempoStretch()
     stretch.presetDefault(channels, sampleRate)
-    stretch.setTransposeSemitones(semitones = -2.0f) // Transpose down 2 semitones
+    stretch.setTransposeSemitones(semitones = pitchSemitones)
 
     // Processes the entire buffer with exact latency alignment and tail overlap-add flushing
     val success = stretch.exact(
@@ -159,6 +168,8 @@ fun processFullTrack(
         outputs = pcmOutput,
         outputSamples = totalOutputSamples
     )
+
+    return pcmOutput
 }
 
 ```
@@ -216,20 +227,20 @@ val outputBytes = PcmConverter.toPcm16(shifted, isLittleEndian = true)
 
 Measured on JVM (HotSpot 21, Apple Silicon / x86_64 equivalent):
 
-| Component            | Benchmark Type                 | Size / Config                          | Throughput / Latency      |
-|----------------------|--------------------------------|----------------------------------------|---------------------------|
-| `FastFft`            | Forward Complex FFT            | N = 1024                               | **112.88 ops/ms**         |
-| `FastFft`            | Inverse Complex FFT            | N = 1024                               | **111.14 ops/ms**         |
-| `ModifiedRealFFT`    | Forward Real FFT               | N = 1024                               | **165.25 ops/ms**         |
-| `ModifiedRealFFT`    | Inverse Real FFT               | N = 1024                               | **151.61 ops/ms**         |
-| `WindowedFFT`        | Full Cycle (WOLA + FFT + IFFT) | N = 1024                               | **74.69 ops/ms**          |
-| `MultiChannelBuffer` | Block Write / Read             | 1024 samples                           | **7 871 – 10 385 ops/ms** |
-| `MultiChannelBuffer` | Wrap-Around Ring Boundary      | 1024 samples                           | **6 787.83 ops/ms**       |
-| `PcmConverter`       | PCM-16 to AudioTrack           | 44 100 frames (Stereo 1.0 s)           | **5.33 ops/ms**           |
-| `PcmConverter`       | AudioTrack to PCM-16           | 44 100 frames (Stereo 1.0 s)           | **3.24 ops/ms**           |
-| `KempoStretch`       | Streaming Block Latency        | Stereo, 1.0x, 44.1 kHz                 | **515.65 μs**             |
-| `KempoStretch`       | Offline Exact Stretch          | Stereo, 1.0 s, 44.1 kHz, 1.25x (+3 st) | **29.25 ms (34.2x RT)**   |
-| `AudioTrack.stretch` | Convenience High-Level API     | Stereo, 1.0 s, 44.1 kHz, +3 st         | **19.25 ms (52.0x RT)**   |
+| Component            | Benchmark Type                 | Size / Config                          | Throughput / Latency     |
+|----------------------|--------------------------------|----------------------------------------|--------------------------|
+| `FastFft`            | Forward Complex FFT            | N = 1024                               | **124.48 ops/ms**        |
+| `FastFft`            | Inverse Complex FFT            | N = 1024                               | **122.44 ops/ms**        |
+| `ModifiedRealFFT`    | Forward Real FFT               | N = 1024                               | **173.55 ops/ms**        |
+| `ModifiedRealFFT`    | Inverse Real FFT               | N = 1024                               | **189.14 ops/ms**        |
+| `WindowedFFT`        | Full Cycle (WOLA + FFT + IFFT) | N = 1024                               | **84.71 ops/ms**         |
+| `MultiChannelBuffer` | Block Write / Read             | 1024 samples                           | **8 783 – 9 571 ops/ms** |
+| `MultiChannelBuffer` | Wrap-Around Ring Boundary      | 1024 samples                           | **7 124.37 ops/ms**      |
+| `PcmConverter`       | PCM-16 to AudioTrack           | 44 100 frames (Stereo 1.0 s)           | **5.65 ops/ms**          |
+| `PcmConverter`       | AudioTrack to PCM-16           | 44 100 frames (Stereo 1.0 s)           | **3.18 ops/ms**          |
+| `KempoStretch`       | Streaming Block Latency        | Stereo, 1.0x, 44.1 kHz                 | **406.63 μs**            |
+| `KempoStretch`       | Offline Exact Stretch          | Stereo, 1.0 s, 44.1 kHz, 1.25x (+3 st) | **25.48 ms (39.3x RT)**  |
+| `AudioTrack.stretch` | Convenience High-Level API     | Stereo, 1.0 s, 44.1 kHz, +3 st         | **16.62 ms (60.2x RT)**  |
 
 ---
 
@@ -239,12 +250,14 @@ The repository includes a Compose Desktop Studio application with real-time wave
 support, and live parameter sliders:
 
 ```bash
-./gradlew :example:run
+./amper run :example
 
 ```
+
+*(or run the `example` module directly from your IDE)*
 
 ---
 
 ## License
 
-This project is licensed under the Apache License, Version 2.0.
+Apache-2.0 License - see [LICENSE](LICENSE) file for details.

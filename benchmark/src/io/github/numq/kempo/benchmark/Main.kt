@@ -194,7 +194,7 @@ private fun runOfflineBenchmarks(bh: DummyBlackhole) {
                 setup(offlineDurationSeconds = dur)
             }
 
-            repeat(2) { bench.processExactOffline(bh) }
+            repeat(3) { bench.processExactOffline(bh) }
 
             val iters = if (dur > 2.0f) 5 else 10
             val totalNs = measureNanoTime {
@@ -219,7 +219,7 @@ private fun runOfflineBenchmarks(bh: DummyBlackhole) {
         pitchSemitones = 3.0f
         setup(offlineDurationSeconds = 1.0f)
     }
-    repeat(2) { trackBench.processAudioTrackConvenience(bh) }
+    repeat(3) { trackBench.processAudioTrackConvenience(bh) }
     val trackNs = measureNanoTime {
         for (i in 0 until 10) {
             trackBench.processAudioTrackConvenience(bh)

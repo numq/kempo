@@ -18,6 +18,7 @@ class KempoStretchBenchmark {
     var splitComputation: Boolean = false
 
     private lateinit var stretch: KempoStretch
+    private lateinit var offlineStretch: KempoStretch
 
     var inBlockSize: Int = 0
         private set
@@ -61,6 +62,16 @@ class KempoStretchBenchmark {
             }
         }
         offlineOutput = Array(channels) { FloatArray(outOfflineSamples) }
+
+        offlineStretch = KempoStretch()
+        offlineStretch.configure(
+            nChannels = channels,
+            blockSamples = (sampleRate * 0.12f).toInt(),
+            intervalSamples = (sampleRate * 0.03f).toInt(),
+            split = splitComputation
+        )
+        offlineStretch.setTransposeSemitones(pitchSemitones)
+        offlineStretch.setFormantSemitones(formantSemitones)
     }
 
     fun processStreamingBlock(bh: DummyBlackhole) {
@@ -69,16 +80,7 @@ class KempoStretchBenchmark {
     }
 
     fun processExactOffline(bh: DummyBlackhole) {
-        val s = KempoStretch()
-        s.configure(
-            nChannels = channels,
-            blockSamples = (sampleRate * 0.12f).toInt(),
-            intervalSamples = (sampleRate * 0.03f).toInt(),
-            split = splitComputation
-        )
-        s.setTransposeSemitones(pitchSemitones)
-        s.setFormantSemitones(formantSemitones)
-        s.exact(offlineInput, totalOfflineSamples, offlineOutput, offlineOutput[0].size)
+        offlineStretch.exact(offlineInput, totalOfflineSamples, offlineOutput, offlineOutput[0].size)
         bh.consume(offlineOutput)
     }
 

@@ -5,7 +5,7 @@ import kotlin.math.min
 
 /**
  * High-performance multichannel circular ring buffer backed by a single flat [FloatArray].
- * Optimized with split-range memory block copies.
+ * Optimized with split-range memory block copies and unrolled accumulator loops.
  */
 @InternalKempoApi
 class MultiChannelBuffer(val channels: Int, minCapacity: Int) {
@@ -110,15 +110,40 @@ class MultiChannelBuffer(val channels: Int, minCapacity: Int) {
         val firstChunk = min(length, capacity - startPos)
 
         var idx = chBase + startPos
-        for (i in 0 until firstChunk) {
-            data[idx++] += src[srcOffset + i]
+        var sIdx = srcOffset
+        var i = 0
+        val limit1 = firstChunk - 3
+        while (i < limit1) {
+            data[idx] += src[sIdx]
+            data[idx + 1] += src[sIdx + 1]
+            data[idx + 2] += src[sIdx + 2]
+            data[idx + 3] += src[sIdx + 3]
+            idx += 4
+            sIdx += 4
+            i += 4
         }
+        while (i < firstChunk) {
+            data[idx++] += src[sIdx++]
+            i++
+        }
+
         val remaining = length - firstChunk
         if (remaining > 0) {
             var remIdx = chBase
-            val offsetRemaining = srcOffset + firstChunk
-            for (i in 0 until remaining) {
-                data[remIdx++] += src[offsetRemaining + i]
+            var j = 0
+            val limit2 = remaining - 3
+            while (j < limit2) {
+                data[remIdx] += src[sIdx]
+                data[remIdx + 1] += src[sIdx + 1]
+                data[remIdx + 2] += src[sIdx + 2]
+                data[remIdx + 3] += src[sIdx + 3]
+                remIdx += 4
+                sIdx += 4
+                j += 4
+            }
+            while (j < remaining) {
+                data[remIdx++] += src[sIdx++]
+                j++
             }
         }
     }
