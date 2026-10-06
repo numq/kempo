@@ -2,6 +2,7 @@ package io.github.numq.kempo
 
 import kotlin.math.PI
 import kotlin.math.sin
+import kotlin.math.sqrt
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -108,5 +109,88 @@ class KempoMultichannelTest {
                 assertTrue(energy < 1e-4, "Crosstalk/bleed detected into silent channel $c: energy=$energy")
             }
         }
+    }
+
+    @Test
+    fun testSixChannelStreamingPipelineAtOnePointFiveSpeed() {
+        val channels = 6
+        val timeRatio = 1.5f
+        val stretch = KempoStretch()
+        stretch.presetDefault(channels, sampleRate)
+
+        val outBlockSize = stretch.defaultInterval
+        val inBlockSize = (outBlockSize * timeRatio).toInt()
+
+        val inBlock = Array(channels) { FloatArray(inBlockSize) }
+        val outBlock = Array(channels) { FloatArray(outBlockSize) }
+
+        var phase = 0.0
+        val phaseStep = 2.0 * PI * 1000.0 / sampleRate
+
+        // Run 25 consecutive blocks simulating real-time streaming playback
+        for (block in 0 until 25) {
+            for (i in 0 until inBlockSize) {
+                val s = sin(phase).toFloat()
+                inBlock[0][i] = s * 0.7f // FL
+                inBlock[1][i] = s * 0.7f // FR
+                inBlock[2][i] = s        // Center dialogue
+                phase += phaseStep
+            }
+
+            stretch.process(inBlock, inBlockSize, outBlock, outBlockSize)
+
+            for (c in 0 until channels) {
+                for (i in 0 until outBlockSize) {
+                    assertFalse(outBlock[c][i].isNaN(), "Streaming output contains NaN in ch $c at block $block")
+                }
+            }
+        }
+    }
+
+    @Test
+    fun testCorrelatedCenterDialoguePhaseRetention() {
+        val channels = 6
+        val numSamples = 48000
+        val timeRatio = 1.5f
+        val outSamples = (numSamples / timeRatio).toInt()
+
+        // Same speech fundamental shared between FL, FR, and Center with different gains
+        val speechSignal = FloatArray(numSamples) { i -> sin(2.0 * PI * 300.0 * i / sampleRate).toFloat() }
+        val input = Array(channels) { c ->
+            FloatArray(numSamples) { i ->
+                when (c) {
+                    0 -> speechSignal[i] * 0.5f // Bleed into FL
+                    1 -> speechSignal[i] * 0.5f // Bleed into FR
+                    2 -> speechSignal[i] * 1.0f // Dominant Center
+                    else -> 0f
+                }
+            }
+        }
+        val output = Array(channels) { FloatArray(outSamples) }
+
+        val stretch = KempoStretch()
+        stretch.presetDefault(channels, sampleRate)
+        stretch.exact(input, numSamples, output, outSamples)
+
+        val evalStart = (outSamples * 0.3f).toInt()
+        val evalEnd = (outSamples * 0.7f).toInt()
+
+        // Verify that Center and FL/FR stay strictly in-phase post-stretch
+        var dotProduct = 0.0
+        var normL = 0.0
+        var normC = 0.0
+        for (i in evalStart until evalEnd) {
+            val fl = output[0][i].toDouble()
+            val c = output[2][i].toDouble()
+            dotProduct += fl * c
+            normL += fl * fl
+            normC += c * c
+        }
+
+        val correlation = dotProduct / (sqrt(normL * normC) + 1e-15)
+        assertTrue(
+            correlation > 0.90,
+            "Correlated dialogue lost phase coherence between Center and Front channels: $correlation"
+        )
     }
 }
