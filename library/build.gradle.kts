@@ -42,7 +42,7 @@ mavenPublishing {
     signAllPublications()
 
     coordinates(
-        groupId = "io.github.numq.kempo", artifactId = "kempo", version = project.version.toString()
+        groupId = "io.github.numq", artifactId = "kempo", version = project.version.toString()
     )
 
     pom {
