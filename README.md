@@ -29,6 +29,7 @@ without C/C++ native toolchains, dynamic libraries, or JNI runtime overhead.
     - [Pitch & Formant Decoupling](#pitch--formant-decoupling)
     - [Tonality Limits & Custom Frequency Maps](#tonality-limits--custom-frequency-maps)
     - [Latency & Memory Mechanics (Zero-GC Streaming)](#latency--memory-mechanics-zero-gc-streaming)
+    - [Multichannel & 5.1 Surround Pipelines](#multichannel--51-surround-pipelines)
 - [Benchmarks](#benchmarks)
 - [Credits & Acknowledgements](#credits--acknowledgements)
 - [License](#license)
@@ -295,6 +296,20 @@ For experimental transformations, speech conditioning, or microtonal scales:
   to maintain sample-accurate sync across mixer tracks.
 * **Pre-Allocated Workspaces**: All scratch buffers, twiddle factors, and spectral mapping indices are allocated upfront
   during `configure()` / `presetDefault()`. Calling `process()` inside real-time loops performs zero memory allocation.
+
+### Multichannel & 5.1 Surround Pipelines
+
+Kempo is channel-layout agnostic and accepts arbitrary channel counts (Mono, Stereo, 5.1, 7.1) via flat channel buffers:
+
+* **Channel Independence & LFE**: Channels are processed in parallel with dynamic inter-channel phase difference (IPD)
+  locking around spectral peaks. Low-frequency effects (LFE) channels can be passed directly without pre-filtering.
+* **Downmixing Order Contract**:
+    * **Headphone/Stereo Output (Recommended: Downmix First)**: For rendering 5.1 content over stereo headphones,
+      downmixing prior to stretching (`5.1 -> Stereo Downmix -> Kempo`) is strongly recommended. It reduces CPU workload
+      by ~3x (processing 2 FFTs instead of 6) and preserves battery on mobile devices while folding dialogue linearly.
+    * **Discrete Passthrough (Stretch First)**: If driving discrete multi-speaker surround setups or binaural HRTF
+      spatializers requiring separate 5.1 feeds, stretching all 6 channels simultaneously preserves phase alignment
+      across front, surround, and center channels without comb-filtering.
 
 ---
 
