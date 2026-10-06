@@ -1,4 +1,4 @@
-# kempo
+# Kempo
 
 [![Maven Central](https://img.shields.io/maven-central/v/io.github.numq.kempo/kempo.svg?label=Maven%20Central&logo=apachemaven)](https://central.sonatype.com/artifact/io.github.numq.kempo/kempo)
 [![Kotlin Multiplatform](https://img.shields.io/badge/Kotlin-Multiplatform-blue.svg?logo=kotlin)](https://kotlinlang.org/docs/multiplatform.html)
