@@ -1,6 +1,6 @@
 # Kempo
 
-[![Maven Central](https://img.shields.io/maven-central/v/io.github.numq.kempo/kempo.svg?label=Maven%20Central&logo=apachemaven)](https://central.sonatype.com/artifact/io.github.numq.kempo/kempo)
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.numq/kempo.svg?label=Maven%20Central&logo=apachemaven)](https://central.sonatype.com/artifact/io.github.numq/kempo)
 [![Kotlin Multiplatform](https://img.shields.io/badge/Kotlin-Multiplatform-blue.svg?logo=kotlin)](https://kotlinlang.org/docs/multiplatform.html)
 [![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
 
@@ -137,7 +137,7 @@ Add the dependency to your module's `build.gradle.kts`:
 kotlin {
     sourceSets {
         commonMain.dependencies {
-            implementation("io.github.numq.kempo:kempo:1.0.0")
+            implementation("io.github.numq:kempo:1.0.0")
         }
     }
 }
@@ -148,7 +148,7 @@ Or for single-target JVM / Android projects:
 
 ```kotlin
 dependencies {
-    implementation("io.github.numq.kempo:kempo:1.0.0")
+    implementation("io.github.numq:kempo:1.0.0")
 }
 
 ```
